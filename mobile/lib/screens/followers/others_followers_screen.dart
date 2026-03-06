@@ -9,6 +9,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:openvine/blocs/my_following/my_following_bloc.dart';
 import 'package:openvine/blocs/others_followers/others_followers_bloc.dart';
 import 'package:openvine/providers/app_providers.dart';
+import 'package:openvine/providers/nostr_client_provider.dart';
 import 'package:openvine/router/nav_extensions.dart';
 import 'package:openvine/widgets/branded_loading_scaffold.dart';
 import 'package:openvine/widgets/profile/follower_count_title.dart';
@@ -34,6 +35,8 @@ class OthersFollowersScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final followRepository = ref.watch(followRepositoryProvider);
+    final blocklistService = ref.watch(contentBlocklistServiceProvider);
+    final nostrClient = ref.watch(nostrServiceProvider);
 
     // Show loading until NostrClient has keys
     if (followRepository == null) {
@@ -43,14 +46,17 @@ class OthersFollowersScreen extends ConsumerWidget {
     return MultiBlocProvider(
       providers: [
         BlocProvider(
-          create: (_) =>
-              OthersFollowersBloc(followRepository: followRepository)
-                ..add(OthersFollowersListLoadRequested(pubkey)),
+          create: (_) => OthersFollowersBloc(
+            followRepository: followRepository,
+            contentBlocklistService: blocklistService,
+            currentUserPubkey: nostrClient.publicKey,
+          )..add(OthersFollowersListLoadRequested(pubkey)),
         ),
         BlocProvider(
-          create: (_) =>
-              MyFollowingBloc(followRepository: followRepository)
-                ..add(const MyFollowingListLoadRequested()),
+          create: (_) => MyFollowingBloc(
+            followRepository: followRepository,
+            contentBlocklistService: blocklistService,
+          )..add(const MyFollowingListLoadRequested()),
         ),
       ],
       child: _OthersFollowersView(pubkey: pubkey, displayName: displayName),
@@ -58,14 +64,20 @@ class OthersFollowersScreen extends ConsumerWidget {
   }
 }
 
-class _OthersFollowersView extends StatelessWidget {
+class _OthersFollowersView extends ConsumerWidget {
   const _OthersFollowersView({required this.pubkey, required this.displayName});
 
   final String pubkey;
   final String? displayName;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    ref.listen(blocklistVersionProvider, (_, _) {
+      context.read<OthersFollowersBloc>().add(
+        const OthersFollowersBlocklistChanged(),
+      );
+    });
+
     final appBarTitle = displayName?.isNotEmpty == true
         ? "$displayName's Followers"
         : 'Followers';

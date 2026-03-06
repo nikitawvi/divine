@@ -30,6 +30,7 @@ class MyFollowersScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final followRepository = ref.watch(followRepositoryProvider);
+    final blocklistService = ref.watch(contentBlocklistServiceProvider);
 
     // Show loading until NostrClient has keys
     if (followRepository == null) {
@@ -39,14 +40,16 @@ class MyFollowersScreen extends ConsumerWidget {
     return MultiBlocProvider(
       providers: [
         BlocProvider(
-          create: (_) =>
-              MyFollowersBloc(followRepository: followRepository)
-                ..add(const MyFollowersListLoadRequested()),
+          create: (_) => MyFollowersBloc(
+            followRepository: followRepository,
+            contentBlocklistService: blocklistService,
+          )..add(const MyFollowersListLoadRequested()),
         ),
         BlocProvider(
-          create: (_) =>
-              MyFollowingBloc(followRepository: followRepository)
-                ..add(const MyFollowingListLoadRequested()),
+          create: (_) => MyFollowingBloc(
+            followRepository: followRepository,
+            contentBlocklistService: blocklistService,
+          )..add(const MyFollowingListLoadRequested()),
         ),
       ],
       child: _MyFollowersView(displayName: displayName),
@@ -54,13 +57,19 @@ class MyFollowersScreen extends ConsumerWidget {
   }
 }
 
-class _MyFollowersView extends StatelessWidget {
+class _MyFollowersView extends ConsumerWidget {
   const _MyFollowersView({required this.displayName});
 
   final String? displayName;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    ref.listen(blocklistVersionProvider, (_, _) {
+      context.read<MyFollowersBloc>().add(
+        const MyFollowersBlocklistChanged(),
+      );
+    });
+
     final appBarTitle = displayName?.isNotEmpty == true
         ? "$displayName's Followers"
         : 'Followers';

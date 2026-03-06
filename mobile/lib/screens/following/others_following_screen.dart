@@ -36,6 +36,7 @@ class OthersFollowingScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final followRepository = ref.watch(followRepositoryProvider);
     final nostrClient = ref.watch(nostrServiceProvider);
+    final blocklistService = ref.watch(contentBlocklistServiceProvider);
 
     // Show loading until NostrClient has keys
     if (followRepository == null) {
@@ -45,14 +46,17 @@ class OthersFollowingScreen extends ConsumerWidget {
     return MultiBlocProvider(
       providers: [
         BlocProvider(
-          create: (_) =>
-              OthersFollowingBloc(nostrClient: nostrClient)
-                ..add(OthersFollowingListLoadRequested(pubkey)),
+          create: (_) => OthersFollowingBloc(
+            nostrClient: nostrClient,
+            contentBlocklistService: blocklistService,
+            currentUserPubkey: nostrClient.publicKey,
+          )..add(OthersFollowingListLoadRequested(pubkey)),
         ),
         BlocProvider(
-          create: (_) =>
-              MyFollowingBloc(followRepository: followRepository)
-                ..add(const MyFollowingListLoadRequested()),
+          create: (_) => MyFollowingBloc(
+            followRepository: followRepository,
+            contentBlocklistService: blocklistService,
+          )..add(const MyFollowingListLoadRequested()),
         ),
       ],
       child: _OthersFollowingView(pubkey: pubkey, displayName: displayName),
@@ -60,14 +64,20 @@ class OthersFollowingScreen extends ConsumerWidget {
   }
 }
 
-class _OthersFollowingView extends StatelessWidget {
+class _OthersFollowingView extends ConsumerWidget {
   const _OthersFollowingView({required this.pubkey, required this.displayName});
 
   final String pubkey;
   final String? displayName;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    ref.listen(blocklistVersionProvider, (_, _) {
+      context.read<OthersFollowingBloc>().add(
+        const OthersFollowingBlocklistChanged(),
+      );
+    });
+
     final appBarTitle = displayName?.isNotEmpty == true
         ? "$displayName's Following"
         : 'Following';
@@ -98,7 +108,7 @@ class _OthersFollowingView extends StatelessWidget {
               width: 32,
               height: 32,
               colorFilter: const ColorFilter.mode(
-                Colors.white,
+                VineTheme.whiteText,
                 BlendMode.srcIn,
               ),
             ),
@@ -211,15 +221,22 @@ class _FollowingEmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Center(
+    return const Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.person_add_outlined, size: 64, color: Colors.grey[600]),
-          const SizedBox(height: 16),
+          Icon(
+            Icons.person_add_outlined,
+            size: 64,
+            color: VineTheme.lightText,
+          ),
+          SizedBox(height: 16),
           Text(
             'Not following anyone yet',
-            style: TextStyle(color: Colors.grey[400], fontSize: 16),
+            style: TextStyle(
+              color: VineTheme.secondaryText,
+              fontSize: 16,
+            ),
           ),
         ],
       ),
@@ -238,11 +255,18 @@ class _FollowingErrorBody extends StatelessWidget {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.error_outline, size: 64, color: Colors.grey[600]),
+          const Icon(
+            Icons.error_outline,
+            size: 64,
+            color: VineTheme.lightText,
+          ),
           const SizedBox(height: 16),
-          Text(
+          const Text(
             'Failed to load following list',
-            style: TextStyle(color: Colors.grey[400], fontSize: 16),
+            style: TextStyle(
+              color: VineTheme.secondaryText,
+              fontSize: 16,
+            ),
           ),
           const SizedBox(height: 8),
           TextButton(onPressed: onRetry, child: const Text('Retry')),
