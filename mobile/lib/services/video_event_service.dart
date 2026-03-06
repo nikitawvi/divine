@@ -1412,6 +1412,12 @@ class VideoEventService extends ChangeNotifier {
             name: 'VideoEventService',
             category: LogCategory.video,
           );
+          // Reusing an active subscription means initial loading is complete
+          // for this request and UI should not remain in a spinner state.
+          if (paginationState != null) {
+            paginationState.isLoading = false;
+            notifyListeners();
+          }
           // Update active subscription mapping
           _activeSubscriptions[subscriptionType] = subscriptionId;
           return; // Reuse existing subscription
@@ -1558,6 +1564,8 @@ class VideoEventService extends ChangeNotifier {
           filters,
           onEose: () {
             eoseReceived = true;
+            // Initial load phase is complete once EOSE arrives, even with 0 events.
+            _paginationStates[subscriptionType]?.isLoading = false;
             feedLoadingTimeout
                 ?.cancel(); // Cancel timeout - EOSE received successfully
             final eoseDuration = DateTime.now().difference(
@@ -1628,6 +1636,9 @@ class VideoEventService extends ChangeNotifier {
                 isOnline: _connectionService.isOnline,
               );
             }
+
+            // Ensure listeners rebuild to show empty-state instead of spinner.
+            notifyListeners();
           },
         );
 
@@ -1689,6 +1700,8 @@ class VideoEventService extends ChangeNotifier {
             _handleNewVideoEvent(event, subscriptionType);
           },
           onError: (error) {
+            _paginationStates[subscriptionType]?.isLoading = false;
+            notifyListeners();
             Log.error(
               '❌ Subscription error for $subscriptionType after $eventCount events: $error',
               name: 'VideoEventService',
@@ -1762,6 +1775,8 @@ class VideoEventService extends ChangeNotifier {
         category: LogCategory.video,
       );
     } catch (e) {
+      _paginationStates[subscriptionType]?.isLoading = false;
+      notifyListeners();
       _error = e.toString();
       Log.error(
         'Failed to subscribe to video events: $e',

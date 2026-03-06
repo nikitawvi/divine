@@ -63,7 +63,7 @@ class _SearchScreenPureState extends ConsumerState<SearchScreenPure>
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
   late TabController _tabController;
-  late UserSearchBloc _userSearchBloc;
+  UserSearchBloc? _userSearchBloc;
   late HashtagSearchBloc _hashtagSearchBloc;
   late VideoSearchBloc _videoSearchBloc;
 
@@ -71,9 +71,10 @@ class _SearchScreenPureState extends ConsumerState<SearchScreenPure>
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
-    _userSearchBloc = UserSearchBloc(
-      profileRepository: ref.read(profileRepositoryProvider)!,
-    );
+    final profileRepository = ref.read(profileRepositoryProvider);
+    if (profileRepository != null) {
+      _userSearchBloc = UserSearchBloc(profileRepository: profileRepository);
+    }
     _hashtagSearchBloc = HashtagSearchBloc(
       hashtagRepository: ref.read(hashtagRepositoryProvider),
     );
@@ -91,7 +92,7 @@ class _SearchScreenPureState extends ConsumerState<SearchScreenPure>
               ctx.searchTerm != null &&
               ctx.searchTerm!.isNotEmpty) {
             _searchController.text = ctx.searchTerm!;
-            _userSearchBloc.add(UserSearchQueryChanged(ctx.searchTerm!));
+            _userSearchBloc?.add(UserSearchQueryChanged(ctx.searchTerm!));
             _hashtagSearchBloc.add(HashtagSearchQueryChanged(ctx.searchTerm!));
             _videoSearchBloc.add(VideoSearchQueryChanged(ctx.searchTerm!));
             Log.info(
@@ -115,7 +116,7 @@ class _SearchScreenPureState extends ConsumerState<SearchScreenPure>
     _searchController.dispose();
     _searchFocusNode.dispose();
     _tabController.dispose();
-    _userSearchBloc.close();
+    _userSearchBloc?.close();
     _hashtagSearchBloc.close();
     _videoSearchBloc.close();
     super.dispose();
@@ -126,13 +127,24 @@ class _SearchScreenPureState extends ConsumerState<SearchScreenPure>
   void _onSearchChanged() {
     final query = _searchController.text.trim();
 
-    _userSearchBloc.add(UserSearchQueryChanged(query));
+    _userSearchBloc?.add(UserSearchQueryChanged(query));
     _hashtagSearchBloc.add(HashtagSearchQueryChanged(query));
     _videoSearchBloc.add(VideoSearchQueryChanged(query));
   }
 
   @override
   Widget build(BuildContext context) {
+    // ProfileRepository may be temporarily unavailable during startup.
+    // Initialize user search bloc lazily when provider becomes ready.
+    final profileRepository = ref.watch(profileRepositoryProvider);
+    if (_userSearchBloc == null && profileRepository != null) {
+      _userSearchBloc = UserSearchBloc(profileRepository: profileRepository);
+      final existingQuery = _searchController.text.trim();
+      if (existingQuery.isNotEmpty) {
+        _userSearchBloc!.add(UserSearchQueryChanged(existingQuery));
+      }
+    }
+
     // Derive feed mode from URL (single source of truth)
     final pageContext = ref.watch(pageContextProvider);
     final isInFeedMode =
@@ -157,7 +169,7 @@ class _SearchScreenPureState extends ConsumerState<SearchScreenPure>
       videoSearchBloc: _videoSearchBloc,
       onClear: () {
         _searchController.clear();
-        _userSearchBloc.add(const UserSearchCleared());
+        _userSearchBloc?.add(const UserSearchCleared());
         _hashtagSearchBloc.add(const HashtagSearchCleared());
         _videoSearchBloc.add(const VideoSearchCleared());
       },
@@ -167,14 +179,38 @@ class _SearchScreenPureState extends ConsumerState<SearchScreenPure>
       bloc: _videoSearchBloc,
       builder: (context, videoState) {
         final videoCount = videoState.videos.length;
-        return BlocBuilder<UserSearchBloc, UserSearchState>(
-          bloc: _userSearchBloc,
-          builder: (context, userSearchState) {
-            final userCount = userSearchState.results.length;
-            return BlocBuilder<HashtagSearchBloc, HashtagSearchState>(
-              bloc: _hashtagSearchBloc,
-              builder: (context, hashtagSearchState) {
-                final hashtagCount = hashtagSearchState.results.length;
+        return BlocBuilder<HashtagSearchBloc, HashtagSearchState>(
+          bloc: _hashtagSearchBloc,
+          builder: (context, hashtagSearchState) {
+            final hashtagCount = hashtagSearchState.results.length;
+            if (_userSearchBloc == null) {
+              return TabBar(
+                controller: _tabController,
+                isScrollable: true,
+                tabAlignment: TabAlignment.start,
+                padding: const EdgeInsets.only(left: 16),
+                indicatorColor: VineTheme.tabIndicatorGreen,
+                indicatorWeight: 4,
+                indicatorSize: TabBarIndicatorSize.tab,
+                dividerColor: Colors.transparent,
+                labelColor: VineTheme.whiteText,
+                unselectedLabelColor: VineTheme.tabIconInactive,
+                labelPadding: const EdgeInsets.symmetric(horizontal: 14),
+                labelStyle: VineTheme.tabTextStyle(),
+                unselectedLabelStyle: VineTheme.tabTextStyle(
+                  color: VineTheme.tabIconInactive,
+                ),
+                tabs: [
+                  Tab(text: 'Videos ($videoCount)'),
+                  const Tab(text: 'Users (0)'),
+                  Tab(text: 'Hashtags ($hashtagCount)'),
+                ],
+              );
+            }
+            return BlocBuilder<UserSearchBloc, UserSearchState>(
+              bloc: _userSearchBloc,
+              builder: (context, userSearchState) {
+                final userCount = userSearchState.results.length;
                 return TabBar(
                   controller: _tabController,
                   isScrollable: true,
@@ -206,10 +242,12 @@ class _SearchScreenPureState extends ConsumerState<SearchScreenPure>
 
     final tabContent = TabBarView(
       controller: _tabController,
-      children: const [
-        _VideosTab(),
-        UserSearchView(),
-        HashtagSearchView(),
+      children: [
+        const _VideosTab(),
+        _userSearchBloc == null
+            ? const _UsersTabLoadingPlaceholder()
+            : const UserSearchView(),
+        const HashtagSearchView(),
       ],
     );
 
@@ -263,11 +301,26 @@ class _SearchScreenPureState extends ConsumerState<SearchScreenPure>
 
     return MultiBlocProvider(
       providers: [
-        BlocProvider.value(value: _userSearchBloc),
+        if (_userSearchBloc != null)
+          BlocProvider.value(value: _userSearchBloc!),
         BlocProvider.value(value: _hashtagSearchBloc),
         BlocProvider.value(value: _videoSearchBloc),
       ],
       child: body,
+    );
+  }
+}
+
+class _UsersTabLoadingPlaceholder extends StatelessWidget {
+  const _UsersTabLoadingPlaceholder();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Center(
+      child: Text(
+        'User search is initializing...',
+        style: TextStyle(color: VineTheme.secondaryText),
+      ),
     );
   }
 }

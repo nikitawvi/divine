@@ -64,7 +64,10 @@ class VideoSearchBloc extends Bloc<VideoSearchEvent, VideoSearchState> {
       await emit.forEach<List<VideoEvent>>(
         _videosRepository.searchVideos(query: query),
         onData: (videos) => state.copyWith(
-          status: VideoSearchStatus.searching,
+          // Consider each stream emission a usable search result snapshot.
+          // This prevents indefinite loading UI when the first emission is empty
+          // and slower sources (e.g. relays) are still pending.
+          status: VideoSearchStatus.success,
           videos: videos,
         ),
       );

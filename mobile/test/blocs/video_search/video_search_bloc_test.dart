@@ -90,7 +90,7 @@ void main() {
       );
 
       blocTest<VideoSearchBloc, VideoSearchState>(
-        'emits [searching, searching(videos), success] '
+        'emits [searching, success(videos)] '
         'when stream yields results',
         setUp: () {
           final video = createVideo(id: 'v1', title: 'Flutter Tutorial');
@@ -107,16 +107,13 @@ void main() {
               .having((s) => s.status, 'status', VideoSearchStatus.searching)
               .having((s) => s.query, 'query', 'flutter'),
           isA<VideoSearchState>()
-              .having((s) => s.status, 'status', VideoSearchStatus.searching)
-              .having((s) => s.videos, 'videos', hasLength(1)),
-          isA<VideoSearchState>()
               .having((s) => s.status, 'status', VideoSearchStatus.success)
               .having((s) => s.videos, 'videos', hasLength(1)),
         ],
       );
 
       blocTest<VideoSearchBloc, VideoSearchState>(
-        'emits progressive searching states then success '
+        'emits progressive success snapshots '
         'when stream yields multiple times',
         setUp: () {
           final localVideo = createVideo(id: 'local-1', title: 'Local');
@@ -142,11 +139,8 @@ void main() {
               .having((s) => s.status, 'status', VideoSearchStatus.searching)
               .having((s) => s.query, 'query', 'flutter'),
           isA<VideoSearchState>()
-              .having((s) => s.status, 'status', VideoSearchStatus.searching)
+              .having((s) => s.status, 'status', VideoSearchStatus.success)
               .having((s) => s.videos, 'videos', hasLength(1)),
-          isA<VideoSearchState>()
-              .having((s) => s.status, 'status', VideoSearchStatus.searching)
-              .having((s) => s.videos, 'videos', hasLength(2)),
           isA<VideoSearchState>()
               .having((s) => s.status, 'status', VideoSearchStatus.success)
               .having((s) => s.videos, 'videos', hasLength(2)),
@@ -154,8 +148,7 @@ void main() {
       );
 
       blocTest<VideoSearchBloc, VideoSearchState>(
-        'stays searching when local cache is empty '
-        'until API yields results and stream completes',
+        'shows success(empty) after local miss, then success(with data)',
         setUp: () {
           final apiVideo = createVideo(id: 'api-1', title: 'API Result');
 
@@ -176,12 +169,11 @@ void main() {
               .having((s) => s.status, 'status', VideoSearchStatus.searching)
               .having((s) => s.query, 'query', 'flutter')
               .having((s) => s.videos, 'videos', isEmpty),
-          // local cache yields [] — deduped by Equatable (same state)
-          // API yields results — still searching
+          // local cache yields [] as a usable result snapshot
           isA<VideoSearchState>()
-              .having((s) => s.status, 'status', VideoSearchStatus.searching)
-              .having((s) => s.videos, 'videos', hasLength(1)),
-          // stream done — now success
+              .having((s) => s.status, 'status', VideoSearchStatus.success)
+              .having((s) => s.videos, 'videos', isEmpty),
+          // API yields results
           isA<VideoSearchState>()
               .having((s) => s.status, 'status', VideoSearchStatus.success)
               .having((s) => s.videos, 'videos', hasLength(1)),
