@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-03-06
+
+### Summary
+This release includes 166 merged pull requests after the first 1.0.5 tag (2026-02-20), covering work merged from 2026-02-21 through 2026-03-06.
+
+### Added
+- **User blocking controls**
+  - Added the ability to block users, with immediate filtering behavior across affected social surfaces.
+- **Unified share experience**
+  - Added a consolidated share sheet with quick-send and people search.
+  - Restored save/download actions in share flows.
+- **Profile and library UX enhancements**
+  - Added a comments tab in profile views.
+  - Updated clip/draft library design and default tab targeting.
+- **Expanded badge system**
+  - Added tiered Human Made badge levels with improved authenticity signaling.
+- **UI component improvements**
+  - Added a close-button variant to `DivineSnackbarContainer`.
+
+### Changed
+- **Brand standardization**
+  - Standardized user-facing naming from legacy `diVine/divine` variants to `Divine`.
+- **Theme consistency**
+  - Replaced hardcoded colors with `VineTheme` tokens across updated surfaces.
+- **Badge consistency across surfaces**
+  - Unified profile feed badge enrichment paths for consistent badge rendering.
+- **Identity display defaults**
+  - Improved generated-name display behavior to reduce raw identifier fallbacks.
+
+### Fixed
+- **Feed stability and performance**
+  - Fixed pooled feed index errors during rapid updates and improved first-frame loading behavior.
+  - Reduced home feed freezes/black flashes during scrolling and resume transitions.
+- **Camera and editor reliability**
+  - Improved camera initialization handling and watchdog behavior.
+  - Fixed clip deletion/reorder edge cases and older-device merge crash paths.
+- **Search and discovery correctness**
+  - Fixed user search zero-result regressions and video search reliability issues.
+- **Auth/session recovery**
+  - Improved expired session messaging, relay fallback handling, and account restore on restart.
+- **Overlay and badge layout**
+  - Corrected badge offsets/status-bar overlap and related fullscreen overlay alignment issues.
+- **Notification behavior**
+  - Fixed notification badge clearing timing and background refresh behavior.
+
+### Quality and Release Infrastructure
+- Improved iOS dSYM handling and GitHub release publish behavior in Codemagic flows.
+- Updated Zapstore release metadata and release-source alignment for tagged distribution.
+
 ### Changed - Model Deduplication (2026-02-08)
 
 #### Summary
