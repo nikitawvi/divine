@@ -74,8 +74,10 @@ class MyFollowingBloc extends Bloc<MyFollowingEvent, MyFollowingState> {
     MyFollowingToggleRequested event,
     Emitter<MyFollowingState> emit,
   ) async {
-    // Clear any previous error
-    emit(state.copyWith(toggleError: () => null));
+    // Clear previous toggle error state before retrying.
+    if (state.status == MyFollowingStatus.toggleFailure) {
+      emit(state.copyWith(status: MyFollowingStatus.success));
+    }
 
     try {
       await _followRepository.toggleFollow(event.pubkey);
@@ -85,12 +87,7 @@ class MyFollowingBloc extends Bloc<MyFollowingEvent, MyFollowingState> {
         name: 'MyFollowingBloc',
         category: LogCategory.system,
       );
-      emit(
-        state.copyWith(
-          toggleError: () =>
-              'Failed to update follow status. Please try again.',
-        ),
-      );
+      emit(state.copyWith(status: MyFollowingStatus.toggleFailure));
     }
   }
 }

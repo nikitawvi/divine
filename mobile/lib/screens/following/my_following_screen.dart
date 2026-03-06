@@ -14,6 +14,9 @@ import 'package:openvine/widgets/branded_loading_scaffold.dart';
 import 'package:openvine/widgets/profile/follower_count_title.dart';
 import 'package:openvine/widgets/user_profile_tile.dart';
 
+const _toggleFollowErrorMessage =
+    'Failed to update follow status. Please try again.';
+
 /// Page widget for displaying current user's following list.
 ///
 /// Creates [MyFollowingBloc] and provides it to the view.
@@ -87,7 +90,9 @@ class _MyFollowingView extends StatelessWidget {
         ),
         title: FollowerCountTitle<MyFollowingBloc, MyFollowingState>(
           title: appBarTitle,
-          selector: (state) => state.status == MyFollowingStatus.success
+          selector: (state) =>
+              state.status == MyFollowingStatus.success ||
+                  state.status == MyFollowingStatus.toggleFailure
               ? state.followingPubkeys.length
               : 0,
         ),
@@ -96,8 +101,8 @@ class _MyFollowingView extends StatelessWidget {
         listenWhen: (previous, current) =>
             (current.status == MyFollowingStatus.success &&
                 previous.status != MyFollowingStatus.success) ||
-            (current.toggleError != null &&
-                current.toggleError != previous.toggleError),
+            (current.status == MyFollowingStatus.toggleFailure &&
+                previous.status != MyFollowingStatus.toggleFailure),
         listener: (context, state) {
           if (state.status == MyFollowingStatus.success) {
             ScreenAnalyticsService().markDataLoaded(
@@ -105,9 +110,9 @@ class _MyFollowingView extends StatelessWidget {
               dataMetrics: {'following_count': state.followingPubkeys.length},
             );
           }
-          if (state.toggleError != null) {
+          if (state.status == MyFollowingStatus.toggleFailure) {
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(state.toggleError!)),
+              const SnackBar(content: Text(_toggleFollowErrorMessage)),
             );
           }
         },
@@ -115,6 +120,9 @@ class _MyFollowingView extends StatelessWidget {
           return switch (state.status) {
             MyFollowingStatus.initial => const Center(
               child: CircularProgressIndicator(),
+            ),
+            MyFollowingStatus.toggleFailure => _FollowingListBody(
+              following: state.followingPubkeys,
             ),
             MyFollowingStatus.success => _FollowingListBody(
               following: state.followingPubkeys,

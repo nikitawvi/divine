@@ -15,6 +15,9 @@ import 'package:openvine/widgets/branded_loading_scaffold.dart';
 import 'package:openvine/widgets/profile/follower_count_title.dart';
 import 'package:openvine/widgets/user_profile_tile.dart';
 
+const _toggleFollowErrorMessage =
+    'Failed to update follow status. Please try again.';
+
 /// Page widget for displaying another user's following list.
 ///
 /// Creates both [OthersFollowingBloc] (for the list) and [MyFollowingBloc]
@@ -114,11 +117,11 @@ class _OthersFollowingView extends StatelessWidget {
         listeners: [
           BlocListener<MyFollowingBloc, MyFollowingState>(
             listenWhen: (previous, current) =>
-                current.toggleError != null &&
-                current.toggleError != previous.toggleError,
+                current.status == MyFollowingStatus.toggleFailure &&
+                previous.status != MyFollowingStatus.toggleFailure,
             listener: (context, state) {
               ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text(state.toggleError!)),
+                const SnackBar(content: Text(_toggleFollowErrorMessage)),
               );
             },
           ),

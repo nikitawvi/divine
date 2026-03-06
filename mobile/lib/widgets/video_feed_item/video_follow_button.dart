@@ -137,7 +137,9 @@ class VideoFollowButtonView extends StatelessWidget {
     >(
       selector: (state) => (
         isFollowing: state.isFollowing(pubkey),
-        isReady: state.status == MyFollowingStatus.success,
+        isReady:
+            state.status == MyFollowingStatus.success ||
+            state.status == MyFollowingStatus.toggleFailure,
       ),
       builder: (context, data) {
         // Don't show button until status is success to prevent flash on Home feed

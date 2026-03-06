@@ -143,7 +143,7 @@ void main() {
       );
 
       blocTest<MyFollowingBloc, MyFollowingState>(
-        'handles toggleFollow error by emitting toggleError',
+        'handles toggleFollow error by emitting toggleFailure status',
         setUp: () {
           when(
             () => mockFollowRepository.toggleFollow(any()),
@@ -153,32 +153,23 @@ void main() {
         act: (bloc) =>
             bloc.add(MyFollowingToggleRequested(validPubkey('user'))),
         expect: () => [
-          // First emission: clear previous error
-          const MyFollowingState(status: MyFollowingStatus.success),
-          // Second emission: set the error
-          const MyFollowingState(
-            status: MyFollowingStatus.success,
-            toggleError: 'Failed to update follow status. Please try again.',
-          ),
+          const MyFollowingState(status: MyFollowingStatus.toggleFailure),
         ],
       );
 
       blocTest<MyFollowingBloc, MyFollowingState>(
-        'clears toggleError before new toggle attempt',
+        'clears toggleFailure before new toggle attempt',
         setUp: () {
           when(
             () => mockFollowRepository.toggleFollow(any()),
           ).thenAnswer((_) async {});
         },
         build: createBloc,
-        seed: () => const MyFollowingState(
-          status: MyFollowingStatus.success,
-          toggleError: 'previous error',
-        ),
+        seed: () =>
+            const MyFollowingState(status: MyFollowingStatus.toggleFailure),
         act: (bloc) =>
             bloc.add(MyFollowingToggleRequested(validPubkey('user'))),
         expect: () => [
-          // Clears previous error
           const MyFollowingState(status: MyFollowingStatus.success),
         ],
       );
@@ -188,9 +179,9 @@ void main() {
         setUp: () {
           // First call takes time, second should be dropped
           var callCount = 0;
-          when(
-            () => mockFollowRepository.toggleFollow(any()),
-          ).thenAnswer((_) async {
+          when(() => mockFollowRepository.toggleFollow(any())).thenAnswer((
+            _,
+          ) async {
             callCount++;
             if (callCount == 1) {
               await Future<void>.delayed(const Duration(milliseconds: 50));
@@ -246,50 +237,33 @@ void main() {
       final updated = state.copyWith(
         status: MyFollowingStatus.success,
         followingPubkeys: ['pubkey1'],
-        toggleError: () => 'error',
       );
 
       expect(updated.status, MyFollowingStatus.success);
       expect(updated.followingPubkeys, ['pubkey1']);
-      expect(updated.toggleError, 'error');
     });
 
     test('copyWith preserves values when not specified', () {
       const state = MyFollowingState(
         status: MyFollowingStatus.success,
         followingPubkeys: ['pubkey1'],
-        toggleError: 'error',
       );
 
       final updated = state.copyWith();
 
       expect(updated.status, MyFollowingStatus.success);
       expect(updated.followingPubkeys, ['pubkey1']);
-      expect(updated.toggleError, 'error');
-    });
-
-    test('copyWith can clear toggleError with null', () {
-      const state = MyFollowingState(
-        status: MyFollowingStatus.success,
-        toggleError: 'error',
-      );
-
-      final updated = state.copyWith(toggleError: () => null);
-
-      expect(updated.toggleError, isNull);
     });
 
     test('props includes all fields', () {
       const state = MyFollowingState(
         status: MyFollowingStatus.success,
         followingPubkeys: ['pubkey1'],
-        toggleError: 'error',
       );
 
       expect(state.props, [
         MyFollowingStatus.success,
         ['pubkey1'],
-        'error',
       ]);
     });
   });
