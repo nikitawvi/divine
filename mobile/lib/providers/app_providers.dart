@@ -79,7 +79,6 @@ import 'package:openvine/services/top_hashtags_service.dart';
 import 'package:openvine/services/upload_manager.dart';
 import 'package:openvine/services/user_data_cleanup_service.dart';
 import 'package:openvine/services/user_list_service.dart';
-import 'package:openvine/services/user_profile_service.dart';
 import 'package:openvine/services/video_event_publisher.dart';
 import 'package:openvine/services/video_event_service.dart';
 import 'package:openvine/services/video_filter_builder.dart';
@@ -800,11 +799,11 @@ bool isNostrReady(Ref ref) {
 @Riverpod(keepAlive: true)
 void zendeskIdentitySync(Ref ref) {
   final authService = ref.watch(authServiceProvider);
-  final userProfileService = ref.watch(userProfileServiceProvider);
+  final profileRepository = ref.watch(profileRepositoryProvider);
 
   // Set initial identity if already authenticated
   if (authService.isAuthenticated && authService.currentPublicKeyHex != null) {
-    _setZendeskIdentity(authService.currentPublicKeyHex!, userProfileService);
+    _setZendeskIdentity(authService.currentPublicKeyHex!, profileRepository);
   }
 
   // Listen to auth state changes
@@ -812,7 +811,7 @@ void zendeskIdentitySync(Ref ref) {
     if (authState == AuthState.authenticated) {
       final pubkeyHex = authService.currentPublicKeyHex;
       if (pubkeyHex != null) {
-        await _setZendeskIdentity(pubkeyHex, userProfileService);
+        await _setZendeskIdentity(pubkeyHex, profileRepository);
       }
     } else if (authState == AuthState.unauthenticated) {
       await ZendeskSupportService.clearUserIdentity();
@@ -830,11 +829,13 @@ void zendeskIdentitySync(Ref ref) {
 /// Helper to set Zendesk identity from pubkey
 Future<void> _setZendeskIdentity(
   String pubkeyHex,
-  UserProfileService userProfileService,
+  ProfileRepository? profileRepository,
 ) async {
   try {
     final npub = NostrKeyUtils.encodePubKey(pubkeyHex);
-    final profile = userProfileService.getCachedProfile(pubkeyHex);
+    final profile = await profileRepository?.getCachedProfile(
+      pubkey: pubkeyHex,
+    );
 
     await ZendeskSupportService.setUserIdentity(
       displayName: profile?.bestDisplayName,
@@ -878,7 +879,7 @@ VideoEventService videoEventService(Ref ref) {
   final subscriptionManager = ref.watch(subscriptionManagerProvider);
   final blocklistService = ref.watch(contentBlocklistServiceProvider);
   final ageVerificationService = ref.watch(ageVerificationServiceProvider);
-  final userProfileService = ref.watch(userProfileServiceProvider);
+  final profileRepository = ref.watch(profileRepositoryProvider);
   final videoFilterBuilder = ref.watch(videoFilterBuilderProvider);
   final db = ref.watch(databaseProvider);
   final eventRouter = EventRouter(db);
@@ -889,7 +890,7 @@ VideoEventService videoEventService(Ref ref) {
   final service = VideoEventService(
     nostrService,
     subscriptionManager: subscriptionManager,
-    userProfileService: userProfileService,
+    profileRepository: profileRepository,
     eventRouter: eventRouter,
     videoFilterBuilder: videoFilterBuilder,
   );
@@ -907,42 +908,6 @@ HashtagService hashtagService(Ref ref) {
   final videoEventService = ref.watch(videoEventServiceProvider);
   final cacheService = ref.watch(hashtagCacheServiceProvider);
   return HashtagService(videoEventService, cacheService);
-}
-
-/// User profile service depends on Nostr service, SubscriptionManager, and ProfileRepository
-@Riverpod(keepAlive: true)
-UserProfileService userProfileService(Ref ref) {
-  final nostrService = ref.watch(nostrServiceProvider);
-  final subscriptionManager = ref.watch(subscriptionManagerProvider);
-  final profileRepository = ref.watch(profileRepositoryProvider);
-  final analyticsService = ref.watch(analyticsApiServiceProvider);
-
-  // Use centralized funnelcake availability check (capability detection)
-  final funnelcakeAvailable =
-      ref.watch(funnelcakeAvailableProvider).asData?.value ?? false;
-
-  final service = UserProfileService(
-    nostrService,
-    subscriptionManager: subscriptionManager,
-    analyticsApiService: analyticsService,
-    funnelcakeAvailable: funnelcakeAvailable,
-  );
-  if (profileRepository != null) {
-    unawaited(service.setProfileRepository(profileRepository));
-  }
-
-  // Inject profile cache lookup into SubscriptionManager to avoid redundant relay requests
-  subscriptionManager.setCacheLookup(hasProfileCached: service.hasProfile);
-
-  // Listen for funnelcake availability changes
-  ref.listen<AsyncValue<bool>>(funnelcakeAvailableProvider, (previous, next) {
-    service.setFunnelcakeAvailable(next.asData?.value ?? false);
-  });
-
-  // Ensure cleanup on disposal
-  ref.onDispose(service.dispose);
-
-  return service;
 }
 
 /// Social service depends on Nostr service, Auth service, and Analytics API
@@ -1157,7 +1122,7 @@ ProfileRepository? profileRepository(Ref ref) {
   final userProfilesDao = ref.watch(databaseProvider).userProfilesDao;
   final funnelcakeClient = ref.watch(funnelcakeApiClientProvider);
 
-  return ProfileRepository(
+  final repo = ProfileRepository(
     nostrClient: nostrClient,
     userProfilesDao: userProfilesDao,
     httpClient: Client(),
@@ -1165,6 +1130,18 @@ ProfileRepository? profileRepository(Ref ref) {
     profileSearchFilter: (query, profiles) =>
         SearchUtils.searchProfiles(query, profiles, limit: 50),
   );
+
+  // Pre-load known cached pubkeys and wire into SubscriptionManager
+  // so Kind 0 relay requests skip already-cached authors.
+  unawaited(
+    repo.loadKnownCachedPubkeys().then((_) {
+      ref
+          .read(subscriptionManagerProvider)
+          .setCacheLookup(hasProfileCached: repo.hasProfile);
+    }),
+  );
+
+  return repo;
 }
 
 /// Enhanced notification service with Nostr integration (lazy loaded)
@@ -1176,7 +1153,7 @@ NotificationServiceEnhanced notificationServiceEnhanced(Ref ref) {
   if (!kIsWeb) {
     // Initialize on mobile - wait for keys to be available
     final nostrService = ref.watch(nostrServiceProvider);
-    final profileService = ref.watch(userProfileServiceProvider);
+    final profileRepository = ref.watch(profileRepositoryProvider);
     final videoService = ref.watch(videoEventServiceProvider);
 
     Future.microtask(() async {
@@ -1199,9 +1176,18 @@ NotificationServiceEnhanced notificationServiceEnhanced(Ref ref) {
           return;
         }
 
+        if (profileRepository == null) {
+          Log.warning(
+            'Notification service initialization skipped - ProfileRepository not ready',
+            name: 'AppProviders',
+            category: LogCategory.system,
+          );
+          return;
+        }
+
         await service.initialize(
           nostrService: nostrService,
-          profileService: profileService,
+          profileRepository: profileRepository,
           videoService: videoService,
         );
       } catch (e) {
@@ -1217,12 +1203,14 @@ NotificationServiceEnhanced notificationServiceEnhanced(Ref ref) {
     Timer(const Duration(seconds: 3), () async {
       try {
         final nostrService = ref.read(nostrServiceProvider);
-        final profileService = ref.read(userProfileServiceProvider);
+        final profileRepository = ref.read(profileRepositoryProvider);
         final videoService = ref.read(videoEventServiceProvider);
+
+        if (profileRepository == null) return;
 
         await service.initialize(
           nostrService: nostrService,
-          profileService: profileService,
+          profileRepository: profileRepository,
           videoService: videoService,
         );
       } catch (e) {
@@ -1295,7 +1283,7 @@ VideoEventPublisher videoEventPublisher(Ref ref) {
   final personalEventCache = ref.watch(personalEventCacheServiceProvider);
   final videoEventService = ref.watch(videoEventServiceProvider);
   final blossomUploadService = ref.watch(blossomUploadServiceProvider);
-  final userProfileService = ref.watch(userProfileServiceProvider);
+  final profileRepository = ref.watch(profileRepositoryProvider);
   final profileStatsDao = ref.watch(databaseProvider).profileStatsDao;
 
   return VideoEventPublisher(
@@ -1305,7 +1293,7 @@ VideoEventPublisher videoEventPublisher(Ref ref) {
     personalEventCache: personalEventCache,
     videoEventService: videoEventService,
     blossomUploadService: blossomUploadService,
-    userProfileService: userProfileService,
+    profileRepository: profileRepository,
     profileStatsDao: profileStatsDao,
   );
 }
@@ -1510,12 +1498,12 @@ Future<MuteService> muteService(Ref ref) async {
 VideoSharingService videoSharingService(Ref ref) {
   final nostrService = ref.watch(nostrServiceProvider);
   final authService = ref.watch(authServiceProvider);
-  final userProfileService = ref.watch(userProfileServiceProvider);
+  final profileRepository = ref.watch(profileRepositoryProvider);
 
   return VideoSharingService(
     nostrService: nostrService,
     authService: authService,
-    userProfileService: userProfileService,
+    profileRepository: profileRepository!,
   );
 }
 
