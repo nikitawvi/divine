@@ -1,42 +1,31 @@
-// ABOUTME: Dialog widget for submitting bug reports to Zendesk
-// ABOUTME: Collects structured data (subject, description, steps, expected behavior)
-// ABOUTME: Submits directly to Zendesk REST API with custom fields
+// ABOUTME: Dialog widget for submitting feature requests to Zendesk
+// ABOUTME: Collects structured data (subject, description, usefulness, when to use)
+// ABOUTME: Submits directly to Zendesk via SDK or REST API with custom fields
 
 import 'dart:async';
 
 import 'package:divine_ui/divine_ui.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:models/models.dart' show LogEntry;
-import 'package:openvine/services/bug_report_service.dart';
 import 'package:openvine/services/zendesk_support_service.dart';
 import 'package:openvine/utils/unified_logger.dart';
 import 'package:openvine/widgets/support_dialog_utils.dart';
 
-/// Dialog for collecting and submitting bug reports
-class BugReportDialog extends StatefulWidget {
-  const BugReportDialog({
-    required this.bugReportService,
-    super.key,
-    this.currentScreen,
-    this.userPubkey,
-    this.testMode = false, // If true, sends to yourself instead of support
-  });
+/// Dialog for collecting and submitting feature requests
+class FeatureRequestDialog extends StatefulWidget {
+  const FeatureRequestDialog({super.key, this.userPubkey});
 
-  final BugReportService bugReportService;
-  final String? currentScreen;
   final String? userPubkey;
-  final bool testMode;
 
   @override
-  State<BugReportDialog> createState() => _BugReportDialogState();
+  State<FeatureRequestDialog> createState() => _FeatureRequestDialogState();
 }
 
-class _BugReportDialogState extends State<BugReportDialog> {
+class _FeatureRequestDialogState extends State<FeatureRequestDialog> {
   final _subjectController = TextEditingController();
   final _descriptionController = TextEditingController();
-  final _stepsController = TextEditingController();
-  final _expectedController = TextEditingController();
+  final _usefulnessController = TextEditingController();
+  final _whenToUseController = TextEditingController();
   bool _isSubmitting = false;
   String? _resultMessage;
   bool? _isSuccess;
@@ -49,8 +38,8 @@ class _BugReportDialogState extends State<BugReportDialog> {
     _closeTimer?.cancel();
     _subjectController.dispose();
     _descriptionController.dispose();
-    _stepsController.dispose();
-    _expectedController.dispose();
+    _usefulnessController.dispose();
+    _whenToUseController.dispose();
     super.dispose();
   }
 
@@ -59,7 +48,7 @@ class _BugReportDialogState extends State<BugReportDialog> {
       _subjectController.text.trim().isNotEmpty &&
       _descriptionController.text.trim().isNotEmpty;
 
-  Future<void> _submitReport() async {
+  Future<void> _submitRequest() async {
     if (!_canSubmit) return;
 
     setState(() {
@@ -69,29 +58,15 @@ class _BugReportDialogState extends State<BugReportDialog> {
     });
 
     try {
-      // Collect diagnostics for device info
-      final description = _descriptionController.text.trim();
-      final reportData = await widget.bugReportService.collectDiagnostics(
-        userDescription: description,
-        currentScreen: widget.currentScreen,
-        userPubkey: widget.userPubkey,
-      );
-
-      // Submit directly to Zendesk REST API with structured fields
-      // Prefix subject with "fix:" for ticket categorization
-      final subject = 'fix: ${_subjectController.text.trim()}';
-      final success = await ZendeskSupportService.createStructuredBugReport(
+      // Submit feature request to Zendesk
+      // Prefix subject with "feat:" for ticket categorization
+      final subject = 'feat: ${_subjectController.text.trim()}';
+      final success = await ZendeskSupportService.createFeatureRequest(
         subject: subject,
-        description: description,
-        stepsToReproduce: _stepsController.text.trim(),
-        expectedBehavior: _expectedController.text.trim(),
-        reportId: reportData.reportId,
-        appVersion: reportData.appVersion,
-        deviceInfo: reportData.deviceInfo,
-        currentScreen: widget.currentScreen,
+        description: _descriptionController.text.trim(),
+        usefulness: _usefulnessController.text.trim(),
+        whenToUse: _whenToUseController.text.trim(),
         userPubkey: widget.userPubkey,
-        errorCounts: reportData.errorCounts,
-        logsSummary: _buildLogsSummary(reportData.recentLogs),
       );
 
       if (!_isDisposed && mounted) {
@@ -100,10 +75,10 @@ class _BugReportDialogState extends State<BugReportDialog> {
           _isSuccess = success;
           if (success) {
             _resultMessage =
-                "Thank you! We've received your report and will use it to make Divine better.";
+                "Thank you! We've received your feature request and will review it.";
           } else {
             _resultMessage =
-                'Failed to send bug report. Please try again later.';
+                'Failed to send feature request. Please try again later.';
           }
         });
 
@@ -118,7 +93,7 @@ class _BugReportDialogState extends State<BugReportDialog> {
       }
     } catch (e, stackTrace) {
       Log.error(
-        'Error submitting bug report: $e',
+        'Error submitting feature request: $e',
         category: LogCategory.system,
         error: e,
         stackTrace: stackTrace,
@@ -128,16 +103,10 @@ class _BugReportDialogState extends State<BugReportDialog> {
         setState(() {
           _isSubmitting = false;
           _isSuccess = false;
-          _resultMessage = 'Bug report failed to send: $e';
+          _resultMessage = 'Feature request failed to send: $e';
         });
       }
     }
-  }
-
-  String? _buildLogsSummary(List<LogEntry> logs) {
-    if (logs.isEmpty) return null;
-    final recentLines = logs.take(50).map((log) => log.toFormattedString());
-    return recentLines.join('\n');
   }
 
   @override
@@ -145,7 +114,7 @@ class _BugReportDialogState extends State<BugReportDialog> {
     return AlertDialog(
       backgroundColor: VineTheme.cardBackground,
       title: const Text(
-        'Report a Bug',
+        'Request a Feature',
         style: TextStyle(color: VineTheme.whiteText),
       ),
       content: SizedBox(
@@ -162,7 +131,7 @@ class _BugReportDialogState extends State<BugReportDialog> {
                 style: const TextStyle(color: VineTheme.whiteText),
                 decoration: buildSupportInputDecoration(
                   label: 'Subject *',
-                  hint: 'Brief summary of the issue',
+                  hint: 'Brief summary of your idea',
                   helper: 'Required',
                 ),
                 onChanged: (_) => setState(() {}),
@@ -177,8 +146,8 @@ class _BugReportDialogState extends State<BugReportDialog> {
                 enabled: !_isSubmitting,
                 style: const TextStyle(color: VineTheme.whiteText),
                 decoration: buildSupportInputDecoration(
-                  label: 'What happened? *',
-                  hint: 'Describe the issue you encountered',
+                  label: 'What would you like? *',
+                  hint: 'Describe the feature you want',
                   helper: 'Required',
                 ),
                 onChanged: (_) => setState(() {}),
@@ -186,40 +155,32 @@ class _BugReportDialogState extends State<BugReportDialog> {
 
               const SizedBox(height: 16),
 
-              // Steps to reproduce field
+              // Usefulness field
               TextField(
-                controller: _stepsController,
+                controller: _usefulnessController,
                 maxLines: 3,
                 enabled: !_isSubmitting,
                 style: const TextStyle(color: VineTheme.whiteText),
                 decoration: buildSupportInputDecoration(
-                  label: 'Steps to Reproduce',
-                  hint: '1. Go to...\n2. Tap on...\n3. See error',
+                  label: 'How would this be useful?',
+                  hint: 'Explain the benefit this feature would provide',
                 ),
                 onChanged: (_) => setState(() {}),
               ),
 
               const SizedBox(height: 16),
 
-              // Expected behavior field
+              // When to use field
               TextField(
-                controller: _expectedController,
+                controller: _whenToUseController,
                 maxLines: 2,
                 enabled: !_isSubmitting,
                 style: const TextStyle(color: VineTheme.whiteText),
                 decoration: buildSupportInputDecoration(
-                  label: 'Expected Behavior',
-                  hint: 'What should have happened instead?',
+                  label: 'When would you use this?',
+                  hint: 'Describe the situations where this would help',
                 ),
                 onChanged: (_) => setState(() {}),
-              ),
-
-              const SizedBox(height: 8),
-
-              // Info text
-              Text(
-                'Device info and logs will be included automatically.',
-                style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
               ),
 
               const SizedBox(height: 16),
@@ -242,12 +203,12 @@ class _BugReportDialogState extends State<BugReportDialog> {
                   decoration: BoxDecoration(
                     color: _isSuccess == true
                         ? VineTheme.vineGreen.withValues(alpha: 0.2)
-                        : VineTheme.error.withValues(alpha: 0.2),
+                        : Colors.red.withValues(alpha: 0.2),
                     borderRadius: BorderRadius.circular(8),
                     border: Border.all(
                       color: _isSuccess == true
                           ? VineTheme.vineGreen
-                          : VineTheme.error,
+                          : Colors.red,
                     ),
                   ),
                   child: Text(
@@ -255,7 +216,7 @@ class _BugReportDialogState extends State<BugReportDialog> {
                     style: TextStyle(
                       color: _isSuccess == true
                           ? VineTheme.vineGreen
-                          : VineTheme.error,
+                          : Colors.red,
                     ),
                   ),
                 ),
@@ -268,22 +229,19 @@ class _BugReportDialogState extends State<BugReportDialog> {
         if (_isSuccess != true)
           TextButton(
             onPressed: _isSubmitting ? null : context.pop,
-            child: const Text(
-              'Cancel',
-              style: TextStyle(color: VineTheme.lightText),
-            ),
+            child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
           ),
 
         // Send/Close button
         ElevatedButton(
           onPressed: _isSuccess == true
               ? context.pop
-              : (_canSubmit ? _submitReport : null),
+              : (_canSubmit ? _submitRequest : null),
           style: ElevatedButton.styleFrom(
             backgroundColor: VineTheme.vineGreen,
             foregroundColor: VineTheme.whiteText,
           ),
-          child: Text(_isSuccess == true ? 'Close' : 'Send Report'),
+          child: Text(_isSuccess == true ? 'Close' : 'Send Request'),
         ),
       ],
     );
