@@ -10,6 +10,14 @@ import 'package:http/http.dart' as http;
 import 'package:meta/meta.dart';
 import 'package:models/models.dart';
 
+/// Builds an authorization header value for authenticated API requests.
+typedef AuthorizationHeaderBuilder =
+    Future<String?> Function({
+      required String url,
+      required String method,
+      String? payload,
+    });
+
 /// HTTP client for the Funnelcake REST API.
 ///
 /// Funnelcake provides a ClickHouse-backed analytics API that offers
@@ -44,13 +52,15 @@ class FunnelcakeApiClient {
     http.Client? httpClient,
     Duration timeout = const Duration(seconds: 15),
     String moderationProfile = defaultModerationProfile,
+    AuthorizationHeaderBuilder? authorizationHeaderBuilder,
   }) : _baseUrl = baseUrl.endsWith('/')
            ? baseUrl.substring(0, baseUrl.length - 1)
            : baseUrl,
        _httpClient = httpClient ?? http.Client(),
        _ownsHttpClient = httpClient == null,
        _timeout = timeout,
-       _moderationProfile = moderationProfile;
+       _moderationProfile = moderationProfile,
+       _authorizationHeaderBuilder = authorizationHeaderBuilder;
 
   /// Default moderation profile sent with video-bearing Funnelcake requests.
   static const String defaultModerationProfile = 'default';
@@ -60,6 +70,7 @@ class FunnelcakeApiClient {
   final bool _ownsHttpClient;
   final Duration _timeout;
   final String _moderationProfile;
+  final AuthorizationHeaderBuilder? _authorizationHeaderBuilder;
 
   /// Whether the API is available (has a non-empty base URL).
   bool get isAvailable => _baseUrl.isNotEmpty;
@@ -68,30 +79,79 @@ class FunnelcakeApiClient {
   @visibleForTesting
   String get baseUrl => _baseUrl;
 
-  Future<http.Response> _get(Uri uri) {
+  Future<http.Response> _get(Uri uri, {String? authorizationHeader}) {
     return _httpClient
         .get(
           uri,
-          headers: {
-            'Accept': 'application/json',
-            'User-Agent': 'OpenVine-Mobile/1.0',
-          },
+          headers: _jsonHeaders(authorizationHeader: authorizationHeader),
         )
         .timeout(_timeout);
   }
 
-  Future<http.Response> _post(Uri uri, {required Object body}) {
+  Future<http.Response> _post(
+    Uri uri, {
+    required Object body,
+    String? authorizationHeader,
+  }) {
     return _httpClient
         .post(
           uri,
-          headers: {
-            'Accept': 'application/json',
-            'Content-Type': 'application/json',
-            'User-Agent': 'OpenVine-Mobile/1.0',
-          },
+          headers: _jsonHeaders(authorizationHeader: authorizationHeader),
           body: jsonEncode(body),
         )
         .timeout(_timeout);
+  }
+
+  Future<http.Response> _postRawJson(
+    Uri uri, {
+    required String body,
+    String? authorizationHeader,
+  }) {
+    return _httpClient
+        .post(
+          uri,
+          headers: _jsonHeaders(authorizationHeader: authorizationHeader),
+          body: body,
+        )
+        .timeout(_timeout);
+  }
+
+  Map<String, String> _jsonHeaders({String? authorizationHeader}) {
+    return {
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+      'User-Agent': 'OpenVine-Mobile/1.0',
+      if (authorizationHeader != null && authorizationHeader.isNotEmpty)
+        'Authorization': authorizationHeader,
+    };
+  }
+
+  Future<String?> _buildAuthorizationHeader({
+    required Uri uri,
+    required String method,
+    String? payload,
+  }) {
+    final builder = _authorizationHeaderBuilder;
+    if (builder == null) return Future.value();
+    return builder(url: uri.toString(), method: method, payload: payload);
+  }
+
+  Future<String> _requireAuthorizationHeader({
+    required Uri uri,
+    required String method,
+    String? payload,
+  }) async {
+    final header = await _buildAuthorizationHeader(
+      uri: uri,
+      method: method,
+      payload: payload,
+    );
+    if (header == null || header.isEmpty) {
+      throw const FunnelcakeException(
+        'Authorization header builder is required for notifications API',
+      );
+    }
+    return header;
   }
 
   Map<String, String> _videoQueryParameters(Map<String, String> params) {
@@ -1717,6 +1777,132 @@ class FunnelcakeApiClient {
     } catch (e) {
       throw FunnelcakeException('Failed to fetch videos by category: $e');
     }
+  }
+
+  /// Fetches paginated notifications for an authenticated user.
+  ///
+  /// Requires [authorizationHeaderBuilder] in client constructor because
+  /// this endpoint uses authenticated requests.
+  Future<ApiNotificationsResponse> getNotifications({
+    required String pubkey,
+    int limit = 50,
+    String? before,
+    bool unreadOnly = false,
+    List<String> types = const [],
+  }) async {
+    if (!isAvailable) {
+      throw const FunnelcakeNotConfiguredException();
+    }
+
+    if (pubkey.isEmpty) {
+      throw const FunnelcakeException('Pubkey cannot be empty');
+    }
+
+    final queryParams = <String, String>{
+      'limit': limit.toString(),
+      if (before != null && before.isNotEmpty) 'before': before,
+      if (unreadOnly) 'unread_only': 'true',
+      if (types.isNotEmpty) 'types': types.join(','),
+    };
+
+    final uri = Uri.parse(
+      '$_baseUrl/api/users/$pubkey/notifications',
+    ).replace(queryParameters: queryParams);
+    final authorizationHeader = await _requireAuthorizationHeader(
+      uri: uri,
+      method: 'GET',
+    );
+
+    try {
+      final response = await _get(
+        uri,
+        authorizationHeader: authorizationHeader,
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        return ApiNotificationsResponse.fromJson(data);
+      } else if (response.statusCode == 404) {
+        // Some backend deployments return 404 for a user with no data yet.
+        return ApiNotificationsResponse.empty();
+      } else {
+        throw FunnelcakeApiException(
+          message: 'Failed to fetch notifications',
+          statusCode: response.statusCode,
+          url: uri.toString(),
+        );
+      }
+    } on TimeoutException {
+      throw FunnelcakeTimeoutException(uri.toString());
+    } on FunnelcakeException {
+      rethrow;
+    } catch (e) {
+      throw FunnelcakeException('Failed to fetch notifications: $e');
+    }
+  }
+
+  /// Marks notifications as read.
+  ///
+  /// If [notificationIds] is empty, server marks all user notifications as read.
+  Future<ApiMarkReadResponse> markNotificationsRead({
+    required String pubkey,
+    List<String> notificationIds = const [],
+  }) async {
+    if (!isAvailable) {
+      throw const FunnelcakeNotConfiguredException();
+    }
+
+    if (pubkey.isEmpty) {
+      throw const FunnelcakeException('Pubkey cannot be empty');
+    }
+
+    final uri = Uri.parse('$_baseUrl/api/users/$pubkey/notifications/read');
+    final bodyMap = <String, dynamic>{
+      if (notificationIds.isNotEmpty) 'notification_ids': notificationIds,
+    };
+    final body = jsonEncode(bodyMap);
+    final authorizationHeader = await _requireAuthorizationHeader(
+      uri: uri,
+      method: 'POST',
+      payload: body,
+    );
+
+    try {
+      final response = await _postRawJson(
+        uri,
+        body: body,
+        authorizationHeader: authorizationHeader,
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        return ApiMarkReadResponse.fromJson(data);
+      } else {
+        throw FunnelcakeApiException(
+          message: 'Failed to mark notifications as read',
+          statusCode: response.statusCode,
+          url: uri.toString(),
+        );
+      }
+    } on TimeoutException {
+      throw FunnelcakeTimeoutException(uri.toString());
+    } on FunnelcakeException {
+      rethrow;
+    } catch (e) {
+      throw FunnelcakeException('Failed to mark notifications as read: $e');
+    }
+  }
+
+  /// Fetches unread notifications count for an authenticated user.
+  Future<ApiUnreadCountResponse> getUnreadNotificationsCount({
+    required String pubkey,
+  }) async {
+    final response = await getNotifications(
+      pubkey: pubkey,
+      unreadOnly: true,
+      limit: 1,
+    );
+    return ApiUnreadCountResponse(unreadCount: response.unreadCount);
   }
 
   /// Disposes of the HTTP client if it was created internally.
