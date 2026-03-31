@@ -2,8 +2,8 @@
 // ABOUTME: Provides server-side filtered notifications, pagination, and mark-as-read functionality
 
 import 'dart:async';
-import 'dart:convert';
 
+import 'package:funnelcake_api_client/funnelcake_api_client.dart';
 import 'package:http/http.dart' as http;
 import 'package:openvine/services/nip98_auth_service.dart';
 import 'package:openvine/utils/unified_logger.dart';
@@ -148,22 +148,38 @@ class MarkReadResponse {
 /// Uses NIP-98 HTTP authentication for all requests.
 /// Provides server-side filtering, pagination, and read state management.
 class RelayNotificationApiService {
-  static const Duration _defaultTimeout = Duration(seconds: 15);
-
   RelayNotificationApiService({
     required String? baseUrl,
     required Nip98AuthService nip98AuthService,
     http.Client? httpClient,
-  }) : _baseUrl = baseUrl,
-       _nip98AuthService = nip98AuthService,
-       _httpClient = httpClient ?? http.Client();
+    FunnelcakeApiClient? apiClient,
+  }) : _apiClient =
+           apiClient ??
+           FunnelcakeApiClient(
+             baseUrl: baseUrl ?? '',
+             httpClient: httpClient,
+             authorizationHeaderBuilder:
+                 ({
+                   required String url,
+                   required String method,
+                   String? payload,
+                 }) async {
+                   final nip98Method = method.toUpperCase() == 'POST'
+                       ? HttpMethod.post
+                       : HttpMethod.get;
+                   final authToken = await nip98AuthService.createAuthToken(
+                     url: url,
+                     method: nip98Method,
+                     payload: payload,
+                   );
+                   return authToken?.authorizationHeader;
+                 },
+           );
 
-  final String? _baseUrl;
-  final Nip98AuthService _nip98AuthService;
-  final http.Client _httpClient;
+  final FunnelcakeApiClient _apiClient;
 
   /// Whether the API is available (has a configured base URL)
-  bool get isAvailable => _baseUrl != null && _baseUrl.isNotEmpty;
+  bool get isAvailable => _apiClient.isAvailable;
 
   /// Fetch notifications for a user
   ///
@@ -198,110 +214,29 @@ class RelayNotificationApiService {
     }
 
     try {
-      // Build URL with query parameters
-      final queryParams = <String, String>{'limit': limit.toString()};
-      if (types != null && types.isNotEmpty) {
-        queryParams['types'] = types.join(',');
-      }
-      if (unreadOnly) {
-        queryParams['unread_only'] = 'true';
-      }
-      if (before != null) {
-        queryParams['before'] = before;
-      }
+      final apiResponse = await _apiClient.getNotifications(
+        pubkey: pubkey,
+        types: types ?? const [],
+        unreadOnly: unreadOnly,
+        limit: limit,
+        before: before,
+      );
+      final result = _notificationsResponseFromApi(apiResponse);
 
-      final uri = Uri.parse(
-        '$_baseUrl/api/users/$pubkey/notifications',
-      ).replace(queryParameters: queryParams);
-      final url = uri.toString();
-
+      final typeBreakdown = <String, int>{};
+      for (final n in result.notifications) {
+        typeBreakdown[n.notificationType] =
+            (typeBreakdown[n.notificationType] ?? 0) + 1;
+      }
       Log.info(
-        'Fetching notifications from Relay API: $url',
+        'Received ${result.notifications.length} notifications, '
+        'unread: ${result.unreadCount}, hasMore: ${result.hasMore}, '
+        'types: $typeBreakdown',
         name: 'RelayNotificationApiService',
         category: LogCategory.system,
       );
 
-      // Create NIP-98 auth token
-      final authToken = await _nip98AuthService.createAuthToken(
-        url: url,
-        method: HttpMethod.get,
-      );
-
-      if (authToken == null) {
-        Log.error(
-          'Failed to create NIP-98 auth token for notifications',
-          name: 'RelayNotificationApiService',
-          category: LogCategory.system,
-        );
-        return NotificationsResponse.empty;
-      }
-
-      final header = authToken.authorizationHeader;
-      final headerPreview = header.length > 50
-          ? '${header.substring(0, 50)}...'
-          : header;
-      Log.debug(
-        'NIP-98 Auth header: $headerPreview',
-        name: 'RelayNotificationApiService',
-        category: LogCategory.system,
-      );
-
-      final response = await _httpClient
-          .get(
-            uri,
-            headers: {
-              'Accept': 'application/json',
-              'User-Agent': 'OpenVine-Mobile/1.0',
-              'Authorization': authToken.authorizationHeader,
-            },
-          )
-          .timeout(_defaultTimeout);
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
-        final result = NotificationsResponse.fromJson(data);
-
-        // Log type breakdown from raw API response
-        final typeBreakdown = <String, int>{};
-        for (final n in result.notifications) {
-          typeBreakdown[n.notificationType] =
-              (typeBreakdown[n.notificationType] ?? 0) + 1;
-        }
-        Log.info(
-          'Received ${result.notifications.length} notifications, '
-          'unread: ${result.unreadCount}, hasMore: ${result.hasMore}, '
-          'types: $typeBreakdown',
-          name: 'RelayNotificationApiService',
-          category: LogCategory.system,
-        );
-
-        return result;
-      } else if (response.statusCode == 404) {
-        Log.debug(
-          'Notifications endpoint returned 404 (user may have no notifications)',
-          name: 'RelayNotificationApiService',
-          category: LogCategory.system,
-        );
-        return NotificationsResponse.empty;
-      } else if (response.statusCode == 401) {
-        Log.error(
-          'Notifications API authentication failed (401)\n'
-          'URL: $url\n'
-          'Response: ${response.body}',
-          name: 'RelayNotificationApiService',
-          category: LogCategory.system,
-        );
-        return NotificationsResponse.empty;
-      } else {
-        Log.error(
-          'Notifications API error: ${response.statusCode}\n'
-          'URL: $url\n'
-          'Response: ${response.body.length > 500 ? response.body.substring(0, 500) : response.body}',
-          name: 'RelayNotificationApiService',
-          category: LogCategory.system,
-        );
-        return NotificationsResponse.empty;
-      }
+      return result;
     } catch (e) {
       Log.error(
         'Error fetching notifications: $e',
@@ -340,88 +275,25 @@ class RelayNotificationApiService {
     }
 
     try {
-      final url = '$_baseUrl/api/users/$pubkey/notifications/read';
-      final uri = Uri.parse(url);
-
-      // Build request body
-      final requestBody = <String, dynamic>{};
-      if (notificationIds != null && notificationIds.isNotEmpty) {
-        requestBody['notification_ids'] = notificationIds;
-      }
-      // Empty body means mark all as read
-
-      final payload = jsonEncode(requestBody);
-
       Log.info(
         'Marking notifications as read: ${notificationIds?.length ?? "all"}',
         name: 'RelayNotificationApiService',
         category: LogCategory.system,
       );
 
-      // Create NIP-98 auth token with payload
-      final authToken = await _nip98AuthService.createAuthToken(
-        url: url,
-        method: HttpMethod.post,
-        payload: payload,
+      final apiResponse = await _apiClient.markNotificationsRead(
+        pubkey: pubkey,
+        notificationIds: notificationIds ?? const [],
+      );
+      final result = _markReadResponseFromApi(apiResponse);
+
+      Log.info(
+        'Marked ${result.markedCount} notifications as read',
+        name: 'RelayNotificationApiService',
+        category: LogCategory.system,
       );
 
-      if (authToken == null) {
-        Log.error(
-          'Failed to create NIP-98 auth token for mark as read',
-          name: 'RelayNotificationApiService',
-          category: LogCategory.system,
-        );
-        return const MarkReadResponse(
-          success: false,
-          error: 'Auth token creation failed',
-        );
-      }
-
-      final response = await _httpClient
-          .post(
-            uri,
-            headers: {
-              'Accept': 'application/json',
-              'Content-Type': 'application/json',
-              'User-Agent': 'OpenVine-Mobile/1.0',
-              'Authorization': authToken.authorizationHeader,
-            },
-            body: payload,
-          )
-          .timeout(_defaultTimeout);
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
-        final result = MarkReadResponse.fromJson(data);
-
-        Log.info(
-          'Marked ${result.markedCount} notifications as read',
-          name: 'RelayNotificationApiService',
-          category: LogCategory.system,
-        );
-
-        return result;
-      } else if (response.statusCode == 401) {
-        Log.error(
-          'Mark as read API authentication failed (401)',
-          name: 'RelayNotificationApiService',
-          category: LogCategory.system,
-        );
-        return const MarkReadResponse(
-          success: false,
-          error: 'Authentication failed',
-        );
-      } else {
-        Log.error(
-          'Mark as read API error: ${response.statusCode}',
-          name: 'RelayNotificationApiService',
-          category: LogCategory.system,
-        );
-        return MarkReadResponse(
-          success: false,
-          error: 'HTTP ${response.statusCode}',
-        );
-      }
+      return result;
     } catch (e) {
       Log.error(
         'Error marking notifications as read: $e',
@@ -437,16 +309,56 @@ class RelayNotificationApiService {
   /// This is a convenience method that fetches just the unread count
   /// without loading all notification data.
   Future<int> getUnreadCount({required String pubkey}) async {
-    final response = await getNotifications(
-      pubkey: pubkey,
-      limit: 1, // Minimal load - we only need the unread_count field
-      unreadOnly: true,
-    );
-    return response.unreadCount;
+    try {
+      final response = await _apiClient.getUnreadNotificationsCount(
+        pubkey: pubkey,
+      );
+      return response.unreadCount;
+    } catch (e) {
+      Log.error(
+        'Error fetching unread count: $e',
+        name: 'RelayNotificationApiService',
+        category: LogCategory.system,
+      );
+      return 0;
+    }
   }
 
   /// Dispose of resources
   void dispose() {
-    _httpClient.close();
+    _apiClient.dispose();
   }
+}
+
+RelayNotification _relayNotificationFromApi(ApiNotification source) {
+  return RelayNotification(
+    id: source.id,
+    sourcePubkey: source.sourcePubkey,
+    sourceEventId: source.sourceEventId,
+    sourceKind: source.sourceKind,
+    notificationType: source.notificationType,
+    createdAt: source.createdAt,
+    read: source.read,
+    referencedEventId: source.referencedEventId,
+    content: source.content,
+  );
+}
+
+NotificationsResponse _notificationsResponseFromApi(
+  ApiNotificationsResponse source,
+) {
+  return NotificationsResponse(
+    notifications: source.notifications.map(_relayNotificationFromApi).toList(),
+    unreadCount: source.unreadCount,
+    nextCursor: source.nextCursor,
+    hasMore: source.hasMore,
+  );
+}
+
+MarkReadResponse _markReadResponseFromApi(ApiMarkReadResponse source) {
+  return MarkReadResponse(
+    success: source.success,
+    markedCount: source.markedCount,
+    error: source.error,
+  );
 }
